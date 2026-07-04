@@ -5,6 +5,7 @@ import google.generativeai as genai
 import os
 import datetime
 import hashlib
+import plotly.express as px
 
 DB_FILE = 'selfsync_v2.db'
 st.set_page_config(page_title="SelfSync | AI Digital Wellness", layout="wide", initial_sidebar_state="expanded")
@@ -175,6 +176,41 @@ def init_db():
         conn.commit()
 
 init_db()
+
+def premium_metric_card(title, value, subtitle="", icon="✨", color="#4ECDC4"):
+    html = f"""
+    <div style="background: rgba(22,22,28,0.4); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px 0 rgba(0,0,0,0.2);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">{title}</span>
+            <span style="background: {color}20; border: 1px solid {color}40; padding: 6px; border-radius: 8px; font-size: 16px;">{icon}</span>
+        </div>
+        <div style="color: white; font-size: 32px; font-weight: 800; margin-bottom: 4px;">{value}</div>
+        <div style="color: {color}; font-size: 12px; font-weight: 600;">{subtitle}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+def premium_trend_chart(df, x_col, y_col, title):
+    fig = px.line(df, x=x_col, y=y_col, markers=True)
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=40, b=0),
+        xaxis=dict(showgrid=False, zeroline=False, title="", tickfont=dict(color="#94a3b8")),
+        yaxis=dict(showgrid=False, zeroline=False, title="", tickfont=dict(color="#94a3b8")),
+        title=dict(text=title, font=dict(color="white", size=16, family="Inter"))
+    )
+    fig.update_traces(line_color="#5d43c2", line_width=3, marker=dict(size=8, color="#4ECDC4"))
+    st.plotly_chart(fig, use_container_width=True)
+
+def premium_empty_state():
+    html = """
+    <div style="text-align: center; padding: 60px 20px; background: rgba(22,22,28,0.3); border-radius: 16px; border: 1px dashed rgba(255,255,255,0.1); margin: 20px 0;">
+        <div style="font-size: 48px; margin-bottom: 16px; opacity: 0.9;">🔭</div>
+        <h3 style="color: white; font-weight: 700; margin-bottom: 8px;">No Telemetry Found</h3>
+        <p style="color: #94a3b8; font-size: 14px; max-width: 400px; margin: 0 auto;">Your dashboard is waiting for data. Head over to the Daily Log to record your first session.</p>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    st.stop()
 
 # --- HELPER FUNCTIONS ---
 def get_user_goal(user_id):
@@ -353,8 +389,7 @@ elif page == "Dashboard" and st.session_state['logged_in']:
     df = fetch_recent_logs(user_id)
         
     if df.empty:
-        st.warning("No data found. Please navigate to the 'Daily Log' page to ingest your first telemetry block.")
-        st.stop()
+        premium_empty_state()
         
     def calculate_score(row):
         score = 50
@@ -406,12 +441,11 @@ elif page == "Dashboard" and st.session_state['logged_in']:
     score_val = int(most_recent['discipline_score'])
     
     with m1:
-        st.metric("Discipline Index", f"{score_val} / 100")
-        st.progress(score_val)
+        premium_metric_card("Discipline Index", f"{score_val}", "Out of 100", "🎯", "#10b981")
     with m2:
-        st.metric("Screen Time", f"{most_recent['screen_time']} hrs", "- Goal Target" if most_recent['screen_time'] < 4 else "+ Attention Leak")
+        premium_metric_card("Screen Time", f"{most_recent['screen_time']}h", "Total usage", "📱", "#f43f5e")
     with m3:
-        st.metric("Productive Work", f"{most_recent['productive_time']} hrs")
+        premium_metric_card("Productive Work", f"{most_recent['productive_time']}h", "Deep focus", "💻", "#3b82f6")
         
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -438,7 +472,7 @@ elif page == "Dashboard" and st.session_state['logged_in']:
     trend_df = trend_df.sort_values(by='log_date', ascending=True)
     trend_df = trend_df.set_index('log_date')
     
-    st.line_chart(trend_df[['discipline_score']], color="#5d43c2")
+    premium_trend_chart(trend_df.reset_index(), 'log_date', 'discipline_score', "Weekly Index Trends")
 
 elif page == "AI Coach Chat" and st.session_state['logged_in']:
     st.markdown("<h1>Cognitive Coach Sync</h1>", unsafe_allow_html=True)
