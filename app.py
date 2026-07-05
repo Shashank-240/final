@@ -173,6 +173,22 @@ def init_db():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
+        
+        try:
+            cursor.execute('ALTER TABLE user_settings ADD COLUMN habits TEXT')
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute('ALTER TABLE user_settings ADD COLUMN initial_score INTEGER')
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute('ALTER TABLE user_settings ADD COLUMN initial_feedback TEXT')
+        except sqlite3.OperationalError:
+            pass
+            
         conn.commit()
 
 init_db()
@@ -213,6 +229,28 @@ def premium_empty_state():
     st.stop()
 
 # --- HELPER FUNCTIONS ---
+def get_user_onboarding(user_id):
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT habits, initial_score, initial_feedback FROM user_settings WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        if result and result[1] is not None:
+            return {"habits": result[0], "score": result[1], "feedback": result[2]}
+        return None
+
+def save_user_onboarding(user_id, habits, score, feedback):
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO user_settings (user_id, habits, initial_score, initial_feedback) 
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET 
+            habits = excluded.habits, 
+            initial_score = excluded.initial_score,
+            initial_feedback = excluded.initial_feedback
+        ''', (user_id, habits, score, feedback))
+        conn.commit()
+
 def get_user_goal(user_id):
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
@@ -223,7 +261,11 @@ def get_user_goal(user_id):
 def update_user_goal(user_id, new_goal):
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO user_settings (user_id, primary_goal) VALUES (?, ?)', (user_id, new_goal))
+        cursor.execute('''
+            INSERT INTO user_settings (user_id, primary_goal) 
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET primary_goal = excluded.primary_goal
+        ''', (user_id, new_goal))
         conn.commit()
 
 def fetch_recent_logs(user_id, days=7):
@@ -282,7 +324,15 @@ if not st.session_state['logged_in']:
     page = st.sidebar.radio("Navigation", ["Login / Register"])
 else:
     st.sidebar.write(f"Welcome, **{st.session_state['username']}**")
-    page = st.sidebar.radio("Navigation", ["Dashboard", "Daily Log", "AI Coach Chat", "Settings"])
+    
+    onboarding_data = get_user_onboarding(st.session_state['user_id'])
+    
+    if not onboarding_data:
+        page = "Onboarding"
+        st.sidebar.warning("Please complete your baseline setup.")
+    else:
+        page = st.sidebar.radio("Navigation", ["Dashboard", "Daily Log", "AI Coach Chat", "Settings"])
+        
     st.sidebar.markdown("---")
     if st.sidebar.button("Logout", use_container_width=True):
         st.session_state['logged_in'] = False
@@ -291,6 +341,46 @@ else:
         st.rerun()
 
 # --- PAGES ---
+
+if page == "Onboarding" and st.session_state['logged_in']:
+    st.markdown("<h1 class='text-glow-primary'>System Calibration</h1>", unsafe_allow_html=True)
+    st.write("Welcome to SelfSync! Before you enter the dashboard, we need to establish your baseline.")
+    user_id = st.session_state['user_id']
+    
+    with st.form("onboarding_form"):
+        st.markdown("### please list your habits and hobbies you have ?")
+        habits = st.text_area("Be honest. The AI will use this to calculate your initial behavioural score.", height=150)
+        submitted = st.form_submit_button("Calculate Initial Score")
+        
+        if submitted:
+            if len(habits) < 5:
+                st.error("Please provide more detail about your habits.")
+            else:
+                with st.spinner("AI is analyzing your behavioral baseline..."):
+                    model = setup_gemini()
+                    if model:
+                        prompt = f"Analyze these habits and hobbies: '{habits}'. Calculate an initial behavioural discipline score from 0 to 100. Provide a 2-sentence reality check. IMPORTANT: Your response must be in this exact format:\nSCORE: [number]\nFEEDBACK: [text]"
+                        try:
+                            response = model.generate_content(prompt)
+                            text = response.text
+                            score = 50
+                            feedback = text
+                            for line in text.split('\n'):
+                                if "SCORE:" in line.upper():
+                                    try:
+                                        score = int(''.join(filter(str.isdigit, line)))
+                                    except:
+                                        pass
+                                elif "FEEDBACK:" in line.upper():
+                                    feedback = line.split("FEEDBACK:")[1].strip()
+                            
+                            save_user_onboarding(user_id, habits, score, feedback)
+                            st.success(f"Baseline established! Your initial score is {score}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"AI generation failed. {e}")
+                    else:
+                        st.error("Gemini API Key missing. Cannot complete onboarding.")
 
 if page == "Login / Register":
     st.markdown("<h1 class='text-glow-primary'>Welcome to SelfSync</h1>", unsafe_allow_html=True)
@@ -437,14 +527,18 @@ elif page == "Dashboard" and st.session_state['logged_in']:
     st.markdown("<br>", unsafe_allow_html=True)
     
     # Metrics Row
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     score_val = int(most_recent['discipline_score'])
+    onboarding_data = get_user_onboarding(user_id)
+    initial_score = onboarding_data['score'] if onboarding_data else 50
     
     with m1:
         premium_metric_card("Discipline Index", f"{score_val}", "Out of 100", "🎯", "#10b981")
     with m2:
-        premium_metric_card("Screen Time", f"{most_recent['screen_time']}h", "Total usage", "📱", "#f43f5e")
+        premium_metric_card("Baseline Score", f"{initial_score}", "Initial behaviour", "🏁", "#8b5cf6")
     with m3:
+        premium_metric_card("Screen Time", f"{most_recent['screen_time']}h", "Total usage", "📱", "#f43f5e")
+    with m4:
         premium_metric_card("Productive Work", f"{most_recent['productive_time']}h", "Deep focus", "💻", "#3b82f6")
         
     st.markdown("<br>", unsafe_allow_html=True)
